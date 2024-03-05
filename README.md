@@ -1,5 +1,5 @@
 ## Overview
-This program is designed to provide comprehensive log data analysis and text processing capabilities. It integrates data extraction, database operations, and text similarity assessments to allow users to interact with and analyze log data effectively.
+This program is designed to provide comprehensive log data analysis capabilities. It integrates data extraction, database operations which are written by the AI agents, and text similarity assessments using NLP to allow users to interact with and analyze log data effectively.
 
 ## Agents Hierarchy
 <img src="Agents Hierarchy.png" width="50%"/>
