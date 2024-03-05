@@ -1,0 +1,392 @@
+Index: src/DefinedFunctions.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/src/DefinedFunctions.py b/src/DefinedFunctions.py
+new file mode 100644
+--- /dev/null	(date 1709034457781)
++++ b/src/DefinedFunctions.py	(date 1709034457781)
+@@ -0,0 +1,26 @@
++from typing import Literal
++from typing_extensions import Annotated
++
++CurrencySymbol = Literal["USD", "EUR"]
++
++
++def exchange_rate(base_currency: CurrencySymbol, quote_currency: CurrencySymbol) -> float:
++    if base_currency == quote_currency:
++        return 1.0
++    elif base_currency == "USD" and quote_currency == "EUR":
++        return 1 / 1.09
++    elif base_currency == "EUR" and quote_currency == "USD":
++        return 1.1
++    else:
++        raise ValueError(f"Unknown currencies {base_currency}, {quote_currency}")
++
++
++@user_proxy.register_for_execution()
++@currency_bot.register_for_llm(description="Currency exchange calculator.")
++def currency_calculator(
++        base_amount: Annotated[float, "Amount of currency in base_currency"],
++        base_currency: Annotated[CurrencySymbol, "Base currency"] = "USD",
++        quote_currency: Annotated[CurrencySymbol, "Quote currency"] = "EUR",
++) -> str:
++    quote_amount = exchange_rate(base_currency, quote_currency) * base_amount
++    return f"{quote_amount} {quote_currency}"
+Index: src/OnlyOAI.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/src/OnlyOAI.py b/src/OnlyOAI.py
+new file mode 100644
+--- /dev/null	(date 1709043164037)
++++ b/src/OnlyOAI.py	(date 1709043164037)
+@@ -0,0 +1,131 @@
++import sqlite3
++import re
++from sklearn.feature_extraction.text import TfidfVectorizer
++from sklearn.metrics.pairwise import cosine_similarity
++
++
++def create_word_logid_mapping(db_path='log_data.db'):
++    conn = sqlite3.connect(db_path)
++    cursor = conn.cursor()
++
++    # Fetch all log messages
++    cursor.execute('SELECT rowid, message FROM logs')
++    logs = cursor.fetchall()
++
++    log_messages = [message for _, message in logs]
++
++    conn.close()
++    return log_messages
++
++
++def get_relevant_keywords(prompt, log_messages):
++    tfidf_vectorizer = TfidfVectorizer()
++    tfidf_matrix = tfidf_vectorizer.fit_transform(log_messages + [prompt])
++
++    # Calculate cosine similarity between the prompt and each log message
++    similarity_scores = cosine_similarity(tfidf_matrix[-1], tfidf_matrix[:-1])
++
++    # Get indices of log messages sorted by similarity
++    sorted_indices = similarity_scores.argsort()[0][::-1]
++
++    # Extract keywords from top similar log messages
++    relevant_keywords = {}
++
++    # Get TF-IDF scores for the prompt
++    prompt_tfidf_scores = tfidf_matrix[-1]
++
++    for index in sorted_indices:
++        message = log_messages[index]
++        words = re.findall(r'\b[a-zA-Z]{2,}\b', message)
++        for word in words:
++            # Get the index of the word in the TF-IDF matrix
++            keyword_index = tfidf_vectorizer.vocabulary_.get(word)
++            if keyword_index is not None:
++                # Get TF-IDF score for the keyword in the prompt
++                keyword_tfidf_score = prompt_tfidf_scores[0, keyword_index]
++                # Store the TF-IDF score of the keyword
++                relevant_keywords[word] = keyword_tfidf_score
++
++    # Sort keywords by TF-IDF score in descending order
++    relevant_keywords = dict(sorted(relevant_keywords.items(), key=lambda item: item[1], reverse=True))
++
++    # Return the top 25 keywords with the highest TF-IDF scores
++    return list(relevant_keywords.keys())[:25]
++
++
++def get_logs_from_keywords(keywords):
++    conn = sqlite3.connect('log_data.db')
++    cursor = conn.cursor()
++
++    relevant_logIds = []
++
++    for keyword in keywords:
++        cursor.execute(f'SELECT log_ids FROM word_logid_mapping WHERE word = "{keyword}"')
++        logs = cursor.fetchall()
++        for log in logs:
++            # remove brackets
++            relevant_logIds.extend(log[0][1:-1].split(','))
++
++    relevant_logs = []
++
++    for logId in list(set(relevant_logIds)):
++        cursor.execute(f'SELECT * FROM logs WHERE rowid = {logId}')
++        logs = cursor.fetchall()
++        relevant_logs.extend(logs[0])
++
++    conn.close()
++    return relevant_logs
++
++
++if __name__ == "__main__":
++    # Example usage
++    log_messages = create_word_logid_mapping()
++    prompt = input("Enter your prompt: ")
++    relevant_keywords = get_relevant_keywords(prompt, log_messages)
++
++    print(f"Relevant keywords: {relevant_keywords}")
++
++    import autogen
++
++    config_list = [
++        {
++            'model': 'gpt-4',
++            'api_key': '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'
++        }
++        ,
++        {
++            'model': 'gpt-3.5-turbo-0613',
++            'api_key': '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'
++        }
++    ]
++
++    llm_config = {
++        "config_list": config_list,
++        "timeout": 120,
++    }
++
++    assistant = autogen.AssistantAgent(
++        name="assistant",
++        llm_config=llm_config,
++        system_message="I help find related logs for a given query."
++    )
++
++    user_proxy = autogen.UserProxyAgent(
++        name="user_proxy",
++        is_termination_msg=lambda x: x.get("content", "") and x.get("content", "").rstrip().endswith("TERMINATE"),
++        human_input_mode="NEVER",
++        max_consecutive_auto_reply=10,
++        code_execution_config={
++            "work_dir": "code",
++            "use_docker": False
++        },
++        llm_config=llm_config
++    )
++
++    task = f"""
++    Find instances where the log message is related to the prompt "{prompt}".
++    here are the log messages that are related to the prompt: {get_logs_from_keywords(relevant_keywords)}
++    """
++
++    # start the conversation
++    user_proxy.initiate_chat(assistant, message=task)
+Index: src/OAI_CONFIG_LIST.txt
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/src/OAI_CONFIG_LIST.txt b/src/OAI_CONFIG_LIST.txt
+new file mode 100644
+--- /dev/null	(date 1709031201396)
++++ b/src/OAI_CONFIG_LIST.txt	(date 1709031201396)
+@@ -0,0 +1,11 @@
++[
++    {
++        'model': 'gpt-4',
++        'api_key': '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'
++    }
++    ,
++    {
++        'model': 'gpt-3.5-turbo-0613',
++        'api_key': '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'
++    }
++]
+\ No newline at end of file
+Index: src/app.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/src/app.py b/src/app.py
+new file mode 100644
+--- /dev/null	(date 1709039900798)
++++ b/src/app.py	(date 1709039900798)
+@@ -0,0 +1,85 @@
++import autogen
++import os
++
++from typing import Literal
++from typing_extensions import Annotated
++
++config_list = [
++    {
++        'model': 'gpt-4',
++        'api_key': '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'
++    }
++    ,
++    {
++        'model': 'gpt-3.5-turbo-0613',
++        'api_key': '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'
++    }
++]
++
++llm_config = {
++    "config_list": config_list,
++    "timeout": 120,
++}
++
++currency_bot = autogen.AssistantAgent(
++    name="currency_bot",
++    system_message="For currency exchange tasks, only use the functions you have been provided with. Reply TERMINATE "
++                   "when the task is done.",
++    llm_config=llm_config,
++)
++
++user_proxy = autogen.UserProxyAgent(
++    name="user_proxy",
++    is_termination_msg=lambda x: x.get("content", "") and x.get("content", "").rstrip().endswith("TERMINATE"),
++    human_input_mode="NEVER",
++    max_consecutive_auto_reply=10,
++    code_execution_config={
++        "work_dir": "code",
++        "use_docker": False
++    }
++)
++
++CurrencySymbol = Literal["USD", "EUR"]
++
++
++def exchange_rate(base_currency: CurrencySymbol, quote_currency: CurrencySymbol) -> float:
++    if base_currency == quote_currency:
++        return 1.0
++    elif base_currency == "USD" and quote_currency == "EUR":
++        return 1 / 1.09
++    elif base_currency == "EUR" and quote_currency == "USD":
++        return 1.1
++    else:
++        raise ValueError(f"Unknown currencies {base_currency}, {quote_currency}")
++
++
++@user_proxy.register_for_execution()
++@currency_bot.register_for_llm(description="Currency exchange calculator.")
++def currency_calculator(
++        base_amount: Annotated[float, "Amount of currency in base_currency"],
++        base_currency: Annotated[CurrencySymbol, "Base currency"] = "USD",
++        quote_currency: Annotated[CurrencySymbol, "Quote currency"] = "EUR",
++) -> str:
++    quote_amount = exchange_rate(base_currency, quote_currency) * base_amount
++    return f"{quote_amount} {quote_currency}"
++
++
++task = """
++You are given a log database file. The file contains two tables 
++1. 'logs' with the following columns:
++time TEXT, layer_source TEXT, message TEXT
++The message column contains log messages. Each log message is a string of alphanumeric characters and spaces.
++2. 'word_logid_mapping' with the following columns:
++word TEXT PRIMARY KEY, log_ids TEXT
++word column contains unique words from the 'message' column of the 'logs' table and log_ids column contains the ids of the logs that contain the word.
++
++You will be given a Query prompt by the user and you task is to help them find the logs they are looking for.
++To help the user, you need to narrow down the logs that are relevant to the user's query you can also ask the user for more information if needed.
++
++"""
++
++# start the conversation
++user_proxy.initiate_chat(
++    currency_bot,
++    message="How much is 123.45 USD in EUR?",
++)
+Index: src/rough.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/src/rough.py b/src/rough.py
+new file mode 100644
+--- /dev/null	(date 1708987845310)
++++ b/src/rough.py	(date 1708987845310)
+@@ -0,0 +1,88 @@
++import sqlite3
++import re
++import json
++import os
++from nltk.corpus import wordnet as wn
++
++def extract_unique_words(message):
++    words = re.findall(r'\b[a-zA-Z]{2,}\b', message)
++    return set(words)
++
++def get_semantically_similar_words(word):
++    similar_words = set()
++    synsets = wn.synsets(word)
++    for synset in synsets:
++        hypernyms = synset.hypernyms()
++        hyponyms = synset.hyponyms()
++        for hypernym in hypernyms:
++            similar_words.update(hypernym.lemma_names())
++        for hyponym in hyponyms:
++            similar_words.update(hyponym.lemma_names())
++    return similar_words
++
++def parse_log_line(line):
++    log_pattern = re.compile(r'(\w+\s+\d+\s+\d{2}:\d{2}:\d{2})\s+(\S+)\s+(.*)')
++    match = log_pattern.match(line)
++    if match:
++        return match.groups()
++    else:
++        return None
++
++def process_log_file_and_update_db(file_path, db_path='log_data.db', encoding='utf-8'):
++    with open(file_path, 'r', encoding=encoding) as file:
++        logs = [parse_log_line(line) for line in file if parse_log_line(line)]
++
++    conn = sqlite3.connect(db_path)
++    cursor = conn.cursor()
++
++    # Create logs table if it doesn't exist
++    cursor.execute("CREATE TABLE IF NOT EXISTS logs(time TEXT, layer_source TEXT, message TEXT)")
++
++    # Insert new logs
++    cursor.executemany('INSERT INTO logs (time, layer_source, message) VALUES (?, ?, ?)', logs)
++    conn.commit()
++
++    # Create or update word_logid_mapping table
++    cursor.execute("CREATE TABLE IF NOT EXISTS word_logid_mapping (word TEXT PRIMARY KEY, log_ids TEXT)")
++
++    # Fetch all log messages to update word-logID mapping
++    cursor.execute('SELECT rowid, message FROM logs')
++    all_logs = cursor.fetchall()
++
++    word_pool = set()
++    word_logid_mapping = {}
++    for log_id, message in all_logs:
++        unique_words = extract_unique_words(message)
++        word_pool.update(unique_words)
++        for word in unique_words:
++            word_logid_mapping.setdefault(word, set()).add(log_id)
++
++    for word, log_ids in word_logid_mapping.items():
++        json_log_ids = json.dumps(list(log_ids))
++        cursor.execute("INSERT OR REPLACE INTO word_logid_mapping (word, log_ids) VALUES (?, ?)",
++                       (word, json_log_ids))
++    conn.commit()
++
++    # Process semantically similar words
++    cursor.execute("CREATE TABLE IF NOT EXISTS word_similar_mapping (word TEXT PRIMARY KEY, similar_words TEXT)")
++
++    word_similar_mapping = {}
++    for word in word_pool:
++        similar_words = get_semantically_similar_words(word)
++        similar_words_in_pool = similar_words.intersection(word_pool)
++        word_similar_mapping[word] = list(similar_words_in_pool)
++
++    for word, similar_words in word_similar_mapping.items():
++        json_similar_words = json.dumps(similar_words)
++        cursor.execute('''
++            INSERT INTO word_similar_mapping (word, similar_words) VALUES (?, ?)
++            ON CONFLICT(word) DO UPDATE SET similar_words=excluded.similar_words
++        ''', (word, json_similar_words))
++
++    conn.commit()
++    conn.close()
++
++# Example usage
++current_directory = os.path.dirname(os.path.abspath('__file__'))  # Adjust if necessary
++log_file_path = os.path.join(current_directory, 'test_log2.out')
++process_log_file_and_update_db(log_file_path)
