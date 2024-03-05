@@ -25,12 +25,12 @@ prompt += " these are all the keywords found in the database." + str(
 config_list = [
     [{
         'model': 'gpt-4-turbo-preview',
-        'api_key': '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'
+        'api_key': 'your-api-key'
     }]
     ,
     [{
         'model': 'gpt-3.5-turbo-1106',
-        'api_key': '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'
+        'api_key': 'your-api-key'
     }]
 ]
 
