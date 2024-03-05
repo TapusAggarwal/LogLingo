@@ -2,7 +2,7 @@
 This program is designed to provide comprehensive log data analysis and text processing capabilities. It integrates data extraction, database operations, and text similarity assessments to allow users to interact with and analyze log data effectively.
 
 ## Agents Hierarchy
-<img src="Agents Hierarchy.png" width="100%"/>
+<img src="Agents Hierarchy.png" width="50%"/>
 
 ### Components
 - `DataExtraction.py`: This module is responsible for parsing log files, extracting useful information such as unique words, and performing initial data processing tasks. It includes functions for regular expression parsing and can interface with SQLite databases for data storage and retrieval.
