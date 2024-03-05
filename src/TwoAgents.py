@@ -14,12 +14,12 @@ from sklearn.metrics.pairwise import cosine_similarity
 config_list = [
     {
         'model': 'gpt-4',
-        'api_key': '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'
+        'api_key': 'your-api-key'
     }
     # ,
     # {
     #     'model': 'gpt-3.5-turbo-0613',
-    #     'api_key': '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'
+    #     'api_key': 'your-api-key'
     # }
 ]
 
